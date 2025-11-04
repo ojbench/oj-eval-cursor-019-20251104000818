@@ -1,0 +1,1 @@
+/usr/bin/c++  -O3 -DNDEBUG -Werror -O3 -DNDEBUG -Werror -rdynamic CMakeFiles/code.dir/main.cpp.o -o code 
