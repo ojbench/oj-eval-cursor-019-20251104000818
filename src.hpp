@@ -35,24 +35,26 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
       V_all = V_all_new;
     }
     
-    // Make copies to work with (keep originals for next iteration)
+    // Start IO operations first (move query while we copy)
+    gpu_sim.MoveMatrixToSharedMem(current_query);
+    
+    // Make copies (these are Calculation ops, run in parallel with IO)
     Matrix* K_copy = matrix_memory_allocator.Allocate("K_copy");
     gpu_sim.Copy(K_all, K_copy, kInGpuHbm);
     Matrix* V_copy = matrix_memory_allocator.Allocate("V_copy");
     gpu_sim.Copy(V_all, V_copy, kInGpuHbm);
     
-    // Move K_copy to SRAM and transpose
+    // Move copies to SRAM
     gpu_sim.MoveMatrixToSharedMem(K_copy);
+    gpu_sim.MoveMatrixToSharedMem(V_copy);
+    
+    // Transpose K_copy
     gpu_sim.Transpose(K_copy, kInSharedMemory);
     
-    // Move query to SRAM and compute Q x K_copy^T
-    gpu_sim.MoveMatrixToSharedMem(current_query);
+    // Compute Q x K_copy^T
     Matrix* QK = matrix_memory_allocator.Allocate("QK");
     gpu_sim.MatMul(current_query, K_copy, QK);
     gpu_sim.ReleaseMatrix(K_copy);
-    
-    // Move V_copy to SRAM
-    gpu_sim.MoveMatrixToSharedMem(V_copy);
     
     // Apply exp to entire QK matrix
     Matrix* QK_exp = matrix_memory_allocator.Allocate("QK_exp");
@@ -62,21 +64,17 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
     // Build softmax matrix row by row
     Matrix* softmax_matrix = matrix_memory_allocator.Allocate("softmax_matrix");
     for (size_t row = 0; row <= i; ++row) {
-      // Get row from QK_exp
       Matrix* exp_row = matrix_memory_allocator.Allocate("exp_row");
       gpu_sim.GetRow(QK_exp, row, exp_row, kInSharedMemory);
       
-      // Sum the exp values
       Matrix* sum_exp = matrix_memory_allocator.Allocate("sum_exp");
       gpu_sim.Sum(exp_row, sum_exp);
       
-      // Divide each element by the sum to get softmax
       Matrix* softmax_row = matrix_memory_allocator.Allocate("softmax_row");
       gpu_sim.MatDiv(exp_row, sum_exp, softmax_row);
       gpu_sim.ReleaseMatrix(exp_row);
       gpu_sim.ReleaseMatrix(sum_exp);
       
-      // Concatenate to softmax matrix
       if (row == 0) {
         gpu_sim.Copy(softmax_row, softmax_matrix, kInSharedMemory);
       } else {
@@ -90,7 +88,7 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
     
     gpu_sim.ReleaseMatrix(QK_exp);
     
-    // Compute softmax_matrix x V_copy in one operation
+    // Compute softmax_matrix x V_copy
     Matrix* result = matrix_memory_allocator.Allocate("result");
     gpu_sim.MatMul(softmax_matrix, V_copy, result);
     gpu_sim.ReleaseMatrix(softmax_matrix);
